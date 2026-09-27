@@ -1,0 +1,50 @@
+name: Build & Sign Apple Shortcut
+
+on:
+  workflow_dispatch:
+    inputs:
+      shortcut_name:
+        description: "Shortcut name"
+        required: true
+        default: "ChatGPT Shortcut"
+      shortcut_description:
+        description: "Describe the shortcut you want"
+        required: true
+        default: "Show a notification saying Hello from ChatGPT"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Show repository
+        run: |
+          echo "Repository loaded successfully"
+          find . -maxdepth 3 -type f | sort
+
+      - name: Build shortcut
+        env:
+          SHORTCUT_NAME: ${{ inputs.shortcut_name }}
+          SHORTCUT_DESCRIPTION: ${{ inputs.shortcut_description }}
+        run: |
+          python3 scripts/build_shortcut.py \
+            "$SHORTCUT_NAME" \
+            "$SHORTCUT_DESCRIPTION"
+
+      - name: Upload signed shortcut
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-shortcut
+          path: output/*.shortcut
+          if-no-files-found: error
