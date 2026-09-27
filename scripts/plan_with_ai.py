@@ -6,6 +6,7 @@ build_shortcut.py before serialization and signing. Model output is untrusted.
 """
 import json
 import os
+import re
 import sys
 from functools import lru_cache
 from scripts.generate_action_database import generate
@@ -21,7 +22,9 @@ text {"$text":["literal",{"$ref":"id"}]}. Control blocks are nested:
 {"if":{"input":{"$ref":"id"},"condition":"contains","value":"word"},"then":[...],"else":[...]};
 {"repeat":{"items":{"$ref":"id"}},"actions":[...]}; {"repeat":{"count":3},"actions":[...]};
 {"menu":{"prompt":"Choose","options":{"First":[...],"Second":[...]}}}.
-Use Set Variable only when named storage is requested. Any app intent must be catalogued.
+When the request names a variable, include Set Variable after the producing action and use
+that named variable in later actions. Check that every requested branch and output is present.
+Any app intent must be catalogued.
 No raw plist and no prefilled fake output. Return only a JSON object.''' 
 
 
@@ -41,7 +44,33 @@ def search_actions(query, limit=12):
     return results[:min(max(int(limit), 1), 20)]
 
 
-def plan(description, client=None):
+def requested_variable(description):
+    match = re.search(r'\b(?:named\s+)?variable\s+(?:called|named)\s+([^.!?,;]+)', description, re.I)
+    return match.group(1).strip(' "\'') if match else None
+
+
+def check_named_variable(description, blueprint):
+    name = requested_variable(description)
+    if not name:
+        return
+    def walk(specs):
+        for spec in specs:
+            yield spec
+            yield from walk(spec.get('then', []))
+            yield from walk(spec.get('else', []))
+            yield from walk(spec.get('actions', []))
+            for branch in spec.get('menu', {}).get('options', {}).values():
+                yield from walk(branch)
+    for spec in walk(blueprint['actions']):
+        if (spec.get('action') or spec.get('identifier') or '').lower() in ('set variable', 'is.workflow.actions.setvariable'):
+            params = spec.get('parameters', {})
+            if any(isinstance(value, str) and value.casefold() == name.casefold()
+                   for key, value in params.items() if key in ('Variable', 'WFVariableName')):
+                return
+    raise ValueError(f'The request explicitly names variable {name!r}, but the blueprint omits its Set Variable action')
+
+
+def plan(description, client=None, validate=None):
     if client is None:
         if not os.environ.get('OPENAI_API_KEY'):
             raise ValueError('Natural-language planning requires OPENAI_API_KEY; JSON blueprints and the built-in integration fixture do not.')
@@ -56,10 +85,18 @@ def plan(description, client=None):
                                            instructions=INSTRUCTIONS, input=history, tools=tools, store=False)
         calls = [item for item in response.output if item.type == 'function_call']
         if not calls:
-            result = json.loads(response.output_text)
-            if not isinstance(result, dict) or not isinstance(result.get('actions'), list) or not result['actions']:
-                raise ValueError('Planner did not return a nonempty actions blueprint')
-            return result
+            try:
+                result = json.loads(response.output_text)
+                if not isinstance(result, dict) or not isinstance(result.get('actions'), list) or not result['actions']:
+                    raise ValueError('Planner did not return a nonempty actions blueprint')
+                check_named_variable(description, result)
+                if validate:
+                    validate(result)
+                return result
+            except (ValueError, KeyError, TypeError) as exc:
+                history.append({'role':'assistant','content':response.output_text})
+                history.append({'role':'user','content':f'Correct the blueprint: {exc}. Search metadata if needed, then return complete JSON.'})
+                continue
         output = []
         for call in calls:
             if call.name != 'search_actions':
@@ -69,7 +106,7 @@ def plan(description, client=None):
                            'output':json.dumps(search_actions(args['query'], args.get('limit',12)))})
         history.extend(item.model_dump(exclude_none=True) for item in response.output)
         history.extend(output)
-    raise ValueError('Planner exceeded 12 metadata searches without a blueprint')
+    raise ValueError('Planner could not produce a complete, valid blueprint after 12 attempts')
 
 
 if __name__ == '__main__':
