@@ -328,7 +328,9 @@ def integration_blueprint():
 
 def build_plain_text_shortcut(name, description):
     from scripts.plan_with_ai import plan
-    return build_with_shortcutkit(name, plan(description))
+    return build_with_shortcutkit(
+        name, plan(description, validate=lambda blueprint: build_with_shortcutkit(name, blueprint))
+    )
 
 
 # ---------------------------------------------------------
