@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "actions": {
+    "orientation_lock": {
+      "name": "Set Orientation Lock",
+      "identifier": "is.workflow.actions.orientationlock.set",
+      "aliases": [
+        "orientation lock",
+        "set orientation lock",
+        "rotation lock",
+        "portrait orientation lock"
+      ]
+    },
+
+    "brightness": {
+      "name": "Set Brightness",
+      "identifier": "is.workflow.actions.setbrightness",
+      "aliases": [
+        "brightness",
+        "set brightness"
+      ]
+    },
+
+    "volume": {
+      "name": "Set Volume",
+      "identifier": "is.workflow.actions.setvolume",
+      "aliases": [
+        "volume",
+        "set volume",
+        "media volume"
+      ]
+    },
+
+    "wifi": {
+      "name": "Set Wi-Fi",
+      "identifier": "is.workflow.actions.wifi.set",
+      "aliases": [
+        "wifi",
+        "wi-fi",
+        "set wifi",
+        "set wi-fi"
+      ]
+    },
+
+    "bluetooth": {
+      "name": "Set Bluetooth",
+      "identifier": "is.workflow.actions.bluetooth.set",
+      "aliases": [
+        "bluetooth",
+        "set bluetooth"
+      ]
+    },
+
+    "low_power_mode": {
+      "name": "Set Low Power Mode",
+      "identifier": "is.workflow.actions.lowpowermode.set",
+      "aliases": [
+        "low power mode",
+        "battery saver"
+      ]
+    },
+
+    "airplane_mode": {
+      "name": "Set Airplane Mode",
+      "identifier": "is.workflow.actions.airplanemode.set",
+      "aliases": [
+        "airplane mode",
+        "flight mode"
+      ]
+    },
+
+    "nothing": {
+      "name": "Nothing",
+      "identifier": "is.workflow.actions.nothing",
+      "aliases": [
+        "nothing"
+      ]
+    }
+  }
+}
