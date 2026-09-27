@@ -43,6 +43,126 @@ jobs:
           print("ShortcutKit actions catalogue loaded")
           PY
 
+      - name: Inspect ShortcutKit internals
+        run: |
+          python3 - <<'PY'
+          import shortcutkit
+          import os
+          import pkgutil
+
+          root = os.path.dirname(shortcutkit.__file__)
+
+          print("SHORTCUTKIT ROOT:")
+          print(root)
+
+          print("\n=== MODULES ===")
+          for module in pkgutil.walk_packages(
+              shortcutkit.__path__,
+              shortcutkit.__name__ + "."
+          ):
+              print(module.name)
+
+          print("\n=== PACKAGE FILES ===")
+          for dirpath, dirnames, filenames in os.walk(root):
+              for filename in filenames:
+                  path = os.path.join(dirpath, filename)
+
+                  if filename.endswith(
+                      (".py", ".json", ".yaml", ".yml", ".plist")
+                  ):
+                      print(path)
+
+          print("\n=== SEARCH FOR WFBrightness ===")
+
+          found = False
+
+          for dirpath, dirnames, filenames in os.walk(root):
+              for filename in filenames:
+                  path = os.path.join(dirpath, filename)
+
+                  try:
+                      with open(
+                          path,
+                          "r",
+                          encoding="utf-8",
+                          errors="ignore"
+                      ) as f:
+                          text = f.read()
+
+                      if "WFBrightness" in text:
+                          found = True
+
+                          print("\nFOUND:")
+                          print(path)
+
+                          positions = []
+                          start = 0
+
+                          while True:
+                              pos = text.find("WFBrightness", start)
+
+                              if pos == -1:
+                                  break
+
+                              positions.append(pos)
+                              start = pos + 1
+
+                          for pos in positions[:10]:
+                              print("\n--- MATCH ---")
+                              print(
+                                  text[
+                                      max(0, pos - 1500):
+                                      pos + 3000
+                                  ]
+                              )
+
+                  except Exception:
+                      pass
+
+          if not found:
+              print("WFBrightness was not found in readable package files.")
+
+          print("\n=== SEARCH FOR VALIDATOR TEXT ===")
+
+          needles = [
+              "unknown parameter",
+              "known:",
+              "CustomOutputName",
+              "WFControlFlowMode"
+          ]
+
+          for needle in needles:
+              print(f"\nSEARCHING: {needle}")
+
+              for dirpath, dirnames, filenames in os.walk(root):
+                  for filename in filenames:
+                      path = os.path.join(dirpath, filename)
+
+                      try:
+                          with open(
+                              path,
+                              "r",
+                              encoding="utf-8",
+                              errors="ignore"
+                          ) as f:
+                              text = f.read()
+
+                          if needle in text:
+                              print("FOUND:", path)
+
+                              pos = text.find(needle)
+
+                              print(
+                                  text[
+                                      max(0, pos - 1000):
+                                      pos + 2500
+                                  ]
+                              )
+
+                      except Exception:
+                          pass
+          PY
+
       - name: Generate ShortcutKit action database
         run: |
           python3 scripts/generate_action_database.py
