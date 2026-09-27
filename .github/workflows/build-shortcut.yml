@@ -28,6 +28,20 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install ShortcutKit
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install shortcutkit
+
+      - name: Verify ShortcutKit
+        run: |
+          python - <<'PY'
+          import shortcutkit
+          from shortcutkit import actions
+          print("ShortcutKit imported successfully")
+          print("ShortcutKit actions catalogue loaded")
+          PY
+
       - name: Show repository
         run: |
           echo "Repository loaded successfully"
