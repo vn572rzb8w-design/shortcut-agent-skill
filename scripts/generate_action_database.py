@@ -1,219 +1,49 @@
 #!/usr/bin/env python3
-
+"""Export ShortcutKit's engine-derived catalogue for grounded AI planning."""
 import json
-import inspect
+import sys
 from pathlib import Path
+from shortcutkit import ACTIONS, PARAM_KINDS, get_action
 
-from shortcutkit import actions
-
-
-OUTPUT = Path("data/actions.json")
+OUTPUT = Path('data/actions.json')
 
 
-def clean(value):
-    """Convert ShortcutKit metadata into JSON-safe data."""
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-
-    if isinstance(value, (list, tuple, set)):
-        return [clean(v) for v in value]
-
-    if isinstance(value, dict):
-        return {
-            str(k): clean(v)
-            for k, v in value.items()
-        }
-
-    return str(value)
-
-
-def extract_parameters(obj):
-    """
-    Try several ways of extracting the parameter schema exposed
-    by ShortcutKit.
-    """
-
-    result = []
-
-    # Classes/functions may expose a Python signature.
-    try:
-        signature = inspect.signature(obj)
-
-        for name, parameter in signature.parameters.items():
-            if name in ("self", "cls"):
-                continue
-
-            item = {"name": name}
-
-            if parameter.default is not inspect.Parameter.empty:
-                item["default"] = clean(parameter.default)
-
-            if parameter.annotation is not inspect.Parameter.empty:
-                item["type"] = clean(parameter.annotation)
-
-            result.append(item)
-
-        if result:
-            return result
-
-    except (TypeError, ValueError):
-        pass
-
-    # Search metadata attributes commonly used by generated APIs.
-    for attribute in (
-        "parameters",
-        "params",
-        "parameter_schema",
-        "schema",
-        "__parameters__",
-    ):
-        try:
-            value = getattr(obj, attribute)
-        except Exception:
-            continue
-
-        if value:
-            if isinstance(value, dict):
-                return [
-                    {
-                        "name": str(name),
-                        "metadata": clean(metadata)
-                    }
-                    for name, metadata in value.items()
-                ]
-
-            if isinstance(value, (list, tuple, set)):
-                return [
-                    {"name": str(item)}
-                    for item in value
-                ]
-
-    return []
-
-
-def discover_actions():
-    database = []
-    seen = set()
-
-    for python_name in dir(actions):
-        if python_name.startswith("_"):
-            continue
-
-        try:
-            obj = getattr(actions, python_name)
-        except Exception:
-            continue
-
-        identifier = None
-
-        # Most generated ShortcutKit action constants are strings.
-        if isinstance(obj, str):
-            identifier = obj
-
-        # Support richer generated objects as well.
-        if identifier is None:
-            for attr in (
-                "identifier",
-                "action_identifier",
-                "id",
-            ):
-                try:
-                    candidate = getattr(obj, attr)
-                except Exception:
-                    continue
-
-                if isinstance(candidate, str):
-                    identifier = candidate
-                    break
-
-        if not identifier:
-            continue
-
-        # Only keep actual Shortcuts/App Intent identifiers.
-        if (
-            not identifier.startswith("is.workflow.actions.")
-            and ".intent." not in identifier.lower()
-            and "appintent" not in identifier.lower()
-        ):
-            continue
-
-        if identifier in seen:
-            continue
-
-        seen.add(identifier)
-
-        entry = {
-            "name": python_name,
-            "identifier": identifier,
-            "parameters": extract_parameters(obj),
-        }
-
-        database.append(entry)
-
-    database.sort(
-        key=lambda x: (
-            x["identifier"].lower(),
-            x["name"].lower()
-        )
-    )
-
-    return database
+def generate():
+    rows = []
+    for identifier, info in sorted(ACTIONS.items()):
+        definition = get_action(identifier).get('definition') or {}
+        labels = {p['Key']: p.get('Label') for p in definition.get('Parameters', [])
+                  if isinstance(p, dict) and p.get('Key')}
+        for label, meta in definition.get('ParameterOverrides', {}).items():
+            if isinstance(meta, dict) and meta.get('Key'):
+                labels.setdefault(meta['Key'], meta.get('Label') or label)
+        params = [{'key': key, 'label': labels.get(key), 'kind': PARAM_KINDS.get(identifier, {}).get(key, 'any')}
+                  for key in info.get('params', [])]
+        rows.append({'identifier': identifier, 'name': info.get('name'),
+                     'keywords': definition.get('ActionKeywords', ''),
+                     'description': (definition.get('Description') or {}).get('DescriptionSummary', ''),
+                     'parameters': params, 'output': info.get('output'),
+                     'output_types': info.get('outputTypes', []),
+                     'app_intent': bool(info.get('descriptor'))})
+    return {'generated_from': 'ShortcutKit WorkflowKit/ActionKit and App Intents index',
+            'action_count': len(rows), 'actions': rows}
 
 
 def main():
-    database = discover_actions()
-
-    OUTPUT.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    payload = {
-        "generated_from": "ShortcutKit",
-        "action_count": len(database),
-        "actions": database,
-    }
-
-    OUTPUT.write_text(
-        json.dumps(
-            payload,
-            indent=2,
-            ensure_ascii=False,
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
-
-    print(
-        f"Wrote {len(database)} actions to {OUTPUT}"
-    )
-
-    # Print several important actions so GitHub logs immediately
-    # tell us whether parameter extraction worked.
-    wanted = (
-        "orientationlock",
-        "setbrightness",
-        "setvolume",
-        "wifi",
-        "bluetooth",
-        "wait",
-        "lowpower",
-    )
-
-    print("\n=== SCHEMA TEST ===")
-
-    for entry in database:
-        identifier_lower = entry["identifier"].lower()
-
-        if any(word in identifier_lower for word in wanted):
-            print(
-                json.dumps(
-                    entry,
-                    indent=2,
-                    ensure_ascii=False
-                )
-            )
+    payload = generate()
+    if len(sys.argv) > 1 and sys.argv[1] == '--search':
+        query = ' '.join(sys.argv[2:]).lower().split()
+        def score(row):
+            name = (row['name'] or '').lower()
+            body = ' '.join((name, row['identifier'].lower(), row['keywords'].lower(), row['description'].lower()))
+            return sum(10 if word in name else 1 for word in query if word in body)
+        matches = sorted((r for r in payload['actions'] if score(r)), key=score, reverse=True)
+        print(json.dumps(matches[:20], ensure_ascii=False, indent=2))
+        return
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    OUTPUT.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+    print(f"Wrote {payload['action_count']} actions with parameter schemas to {OUTPUT}")
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

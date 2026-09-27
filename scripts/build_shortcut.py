@@ -5,9 +5,13 @@ import os
 import plistlib
 import sys
 import tempfile
+from pathlib import Path
 from urllib.request import Request, urlopen
 
-from shortcutkit import Shortcut, actions
+from shortcutkit import Shortcut, actions, ACTIONS, PARAM_KINDS, ref, variable, text, picker
+import re
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 HUBSIGN_URL = "https://hubsign.routinehub.services/sign"
@@ -110,22 +114,133 @@ def resolve_identifier(identifier):
     if identifier in ACTION_LOOKUP:
         return ACTION_LOOKUP[identifier]
 
-    # ShortcutKit intentionally permits identifiers outside its
-    # built-in set, which is needed for third-party App Intents.
-    # For Apple/native actions, however, print a warning so we
-    # can see when the AI has invented something.
-    if identifier.startswith("is.workflow.actions."):
-        raise ValueError(
-            "Unknown built-in Apple Shortcuts action identifier: "
-            + identifier
-        )
+    if identifier in ACTIONS:
+        return identifier
+    exact = [key for key, info in ACTIONS.items() if info.get('name', '').lower() == identifier.lower()]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        native = [key for key in exact if key == 'is.workflow.actions.' + identifier.lower().replace(' ', '')]
+        if len(native) == 1:
+            return native[0]
+    names = {}
+    for key, info in ACTIONS.items():
+        for label in (info.get("name"), key.rsplit(".", 1)[-1]):
+            if label:
+                names.setdefault(re.sub(r"[^a-z0-9]", "", label.lower()), []).append(key)
+    normalized = re.sub(r"[^a-z0-9]", "", identifier.lower())
+    matches = list(dict.fromkeys(names.get(normalized, [])))
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        raise ValueError(f"Ambiguous action {identifier!r}: {matches}. Use an exact identifier.")
+    raise ValueError(f"Unknown action {identifier!r}. Third-party App Intents require imported metadata; arbitrary identifiers are unsafe.")
 
-    print(
-        "WARNING: identifier is outside ShortcutKit's built-in "
-        f"catalogue; passing through: {identifier}"
-    )
 
-    return identifier
+def resolve_parameter(identifier, key):
+    info = ACTIONS[identifier]
+    keys = set(info.get("params", [])) | set(PARAM_KINDS.get(identifier, {}))
+    if key in keys:
+        return key
+    definition = __import__('shortcutkit').get_action(identifier)
+    aliases = {}
+    schema = (definition or {}).get('definition', {})
+    for p in schema.get('Parameters', []):
+        label = p.get('Label')
+        if label and p.get('Key'):
+            aliases.setdefault(re.sub(r'[^a-z0-9]', '', label.lower()), set()).add(p['Key'])
+    for label, p in schema.get('ParameterOverrides', {}).items():
+        if p.get('Key'):
+            aliases.setdefault(re.sub(r'[^a-z0-9]', '', label.lower()), set()).add(p['Key'])
+    candidates = aliases.get(re.sub(r'[^a-z0-9]', '', key.lower()), set())
+    if len(candidates) == 1:
+        return candidates.pop()
+    raise ValueError(f"{identifier}: unknown or ambiguous parameter {key!r}; available keys: {sorted(keys)}")
+
+
+def resolve_value(value, produced, names):
+    if isinstance(value, dict):
+        if '$ref' in value:
+            target = value['$ref']
+            if target not in produced:
+                raise ValueError(f"Unknown or forward action reference {target!r}")
+            return ref(produced[target])
+        if '$variable' in value:
+            target = value['$variable']
+            if target not in names:
+                raise ValueError(f"Named variable {target!r} has not been set")
+            return variable(target)
+        if '$text' in value:
+            return text(*(resolve_value(part, produced, names) for part in value['$text']))
+        return {k: resolve_value(v, produced, names) for k, v in value.items()}
+    if isinstance(value, list):
+        return [resolve_value(v, produced, names) for v in value]
+    return value
+
+
+def dictionary_items(mapping, produced, names):
+    """Encode a simple dictionary using Shortcuts' WFDictionaryFieldValue format."""
+    encoded = []
+    for key, item in mapping.items():
+        if not isinstance(key, str):
+            raise ValueError('Dictionary keys must be strings')
+        if isinstance(item, bool):
+            kind, content = 4, {'WFSerializationType': 'WFNumberSubstitutableState', 'Value': item}
+        elif isinstance(item, (int, float)):
+            kind, content = 3, text(str(item))
+        elif isinstance(item, (list, dict)) and not any(k.startswith('$') for k in item if isinstance(k, str)):
+            raise ValueError('Nested dictionary/array entries require an explicitly serialized WFValue; cannot safely infer their encoding')
+        else:
+            kind, content = 0, text(resolve_value(item, produced, names))
+        encoded.append({'WFItemType': kind, 'WFKey': text(key), 'WFValue': content})
+    return {'WFSerializationType': 'WFDictionaryFieldValue',
+            'Value': {'WFDictionaryFieldValueItems': encoded}}
+
+
+def validate_document(document, expected):
+    entries = document.get('WFWorkflowActions')
+    if not isinstance(entries, list) or len(entries) != expected or not entries:
+        raise ValueError(f"Serialized action count mismatch: expected {expected}, got {len(entries) if isinstance(entries, list) else 'invalid'}")
+    seen, groups, stack = set(), {}, []
+    def walk(obj, current):
+        if isinstance(obj, dict):
+            if obj.get('Type') == 'ActionOutput':
+                target = obj.get('OutputUUID')
+                if target not in seen:
+                    raise ValueError(f"Action {current}: dangling or forward OutputUUID {target}")
+            for v in obj.values(): walk(v, current)
+        elif isinstance(obj, list):
+            for v in obj: walk(v, current)
+    for index, entry in enumerate(entries, 1):
+        identifier = entry.get('WFWorkflowActionIdentifier')
+        if identifier not in ACTIONS:
+            raise ValueError(f"Action {index}: unknown identifier {identifier}")
+        params = entry.get('WFWorkflowActionParameters', {})
+        uid = params.get('UUID')
+        if not uid or uid in seen:
+            raise ValueError(f"Action {index}: missing or duplicate UUID")
+        walk(params, index)
+        seen.add(uid)
+        if 'WFControlFlowMode' in params:
+            gid = params.get('GroupingIdentifier')
+            if not gid or type(params['WFControlFlowMode']) is not int:
+                raise ValueError(f"Action {index}: invalid control flow mode or group")
+            groups.setdefault(gid, []).append((identifier, params['WFControlFlowMode']))
+            mode = params['WFControlFlowMode']
+            if mode == 0:
+                stack.append(gid)
+            elif not stack or stack[-1] != gid:
+                raise ValueError(f"Action {index}: crossing or orphaned control-flow group {gid}")
+            elif mode == 2:
+                stack.pop()
+            elif mode != 1:
+                raise ValueError(f"Action {index}: invalid control-flow mode {mode}")
+    if stack:
+        raise ValueError(f"Unclosed control-flow groups: {stack}")
+    for gid, members in groups.items():
+        if members[0][1] != 0 or members[-1][1] != 2 or len({i for i, _ in members}) != 1:
+            raise ValueError(f"Invalid control-flow group {gid}: {members}")
+    return len(entries)
 
 
 # ---------------------------------------------------------
@@ -150,56 +265,50 @@ def normalize_parameters(parameters):
 
 def build_with_shortcutkit(name, blueprint):
     shortcut = Shortcut(name)
-
-    specs = blueprint["actions"]
-
-    print(
-        f"Blueprint contains {len(specs)} action(s)"
-    )
-
-    for index, spec in enumerate(specs, start=1):
-        if not isinstance(spec, dict):
-            raise ValueError(
-                f"Action {index} must be a JSON object"
-            )
-
-        identifier = resolve_identifier(
-            spec.get("identifier")
-        )
-
-        parameters = normalize_parameters(
-            spec.get("parameters", {})
-        )
-
-        print()
-        print(f"Action {index}")
-        print(f"Identifier: {identifier}")
-
-        if parameters:
-            print(
-                "Parameters:",
-                json.dumps(
-                    parameters,
-                    ensure_ascii=False,
-                    indent=2
-                )
-            )
-        else:
-            print("Parameters: {}")
-
-        try:
-            shortcut.action(
-                identifier,
-                **parameters
-            )
-        except Exception as exc:
-            raise ValueError(
-                f"ShortcutKit rejected action {index}\n"
-                f"Identifier: {identifier}\n"
-                f"Parameters: {json.dumps(parameters, ensure_ascii=False)}\n"
-                f"Reason: {exc}"
-            ) from exc
-
+    produced, names = {}, set()
+    def emit(specs):
+        for spec in specs:
+            if not isinstance(spec, dict):
+                raise ValueError('Every action must be an object')
+            if 'if' in spec:
+                clause = spec['if']
+                gid = shortcut.if_(resolve_value(clause['input'], produced, names), clause['condition'], clause.get('value'))
+                emit(spec.get('then', []))
+                if 'else' in spec:
+                    shortcut.otherwise(gid)
+                    emit(spec['else'])
+                shortcut.end_if(gid)
+            elif 'repeat' in spec:
+                clause = spec['repeat']
+                gid = (shortcut.repeat_each(resolve_value(clause['items'], produced, names)) if 'items' in clause
+                       else shortcut.repeat_count(clause['count']))
+                emit(spec.get('actions', []))
+                end = shortcut.end_repeat_each(gid) if 'items' in clause else shortcut.end_repeat_count(gid)
+                if 'id' in spec: produced[spec['id']] = end
+            elif 'menu' in spec:
+                clause = spec['menu']
+                options = clause['options']
+                gid = shortcut.choose_from_menu(clause.get('prompt', ''), list(options))
+                for title, body in options.items():
+                    shortcut.menu_item(gid, title)
+                    emit(body)
+                shortcut.end_menu(gid)
+            else:
+                identifier = resolve_identifier(spec.get('identifier') or spec.get('action'))
+                raw = normalize_parameters(spec.get('parameters', {}))
+                params = {resolve_parameter(identifier, k): resolve_value(v, produced, names) for k, v in raw.items()}
+                if identifier == 'is.workflow.actions.dictionary' and isinstance(raw.get('Items'), dict) and 'WFSerializationType' not in raw['Items']:
+                    params['WFItems'] = dictionary_items(raw['Items'], produced, names)
+                try:
+                    entry = shortcut.action(identifier, **params)
+                except Exception as exc:
+                    raise ValueError(f"Action {identifier} rejected: {exc}") from exc
+                if 'id' in spec:
+                    if spec['id'] in produced: raise ValueError(f"Duplicate action id {spec['id']}")
+                    produced[spec['id']] = entry
+                if identifier == 'is.workflow.actions.setvariable':
+                    names.add(params.get('WFVariableName'))
+    emit(blueprint['actions'])
     return shortcut
 
 
@@ -207,22 +316,19 @@ def build_with_shortcutkit(name, blueprint):
 # LEGACY PLAIN-TEXT TEST
 # ---------------------------------------------------------
 
+def integration_blueprint():
+    return {'actions': [
+            {'action': 'Ask for Input', 'id': 'answer', 'parameters': {'Input Type': 'Text', 'question': 'Enter text'}},
+            {'action': 'Set Variable', 'parameters': {'Variable': 'Entered Text', 'Input': {'$ref': 'answer'}}},
+            {'if': {'input': {'$variable': 'Entered Text'}, 'condition': 'contains', 'value': 'work'},
+             'then': [{'action': 'Show Notification', 'parameters': {'Body': {'$text': ['Entered: ', {'$variable': 'Entered Text'}]}}}],
+             'else': [{'action': 'Copy to Clipboard', 'parameters': {'Content': {'$variable': 'Entered Text'}}}]}
+        ]}
+
+
 def build_plain_text_shortcut(name, description):
-    shortcut = Shortcut(name)
-
-    # These are known ShortcutKit catalogue constants.
-    shortcut.action(
-        actions.GETTEXT,
-        WFTextActionText=description
-    )
-
-    shortcut.action(
-        actions.NOTIFICATION,
-        WFNotificationActionTitle=name,
-        WFNotificationActionBody=description
-    )
-
-    return shortcut
+    from scripts.plan_with_ai import plan
+    return build_with_shortcutkit(name, plan(description))
 
 
 # ---------------------------------------------------------
@@ -353,7 +459,7 @@ def main():
     print(f"Shortcut name: {name}")
     print(f"Input length: {len(description)}")
 
-    blueprint = parse_blueprint(description)
+    blueprint = integration_blueprint() if os.getenv('INTEGRATION_FIXTURE') == 'true' else parse_blueprint(description)
 
     try:
         if blueprint is not None:
@@ -395,12 +501,7 @@ def main():
             unsigned_path
         )
 
-        action_count = len(
-            document.get(
-                "WFWorkflowActions",
-                []
-            )
-        )
+        action_count = validate_document(document, len(shortcut.actions))
 
         print(
             f"ShortcutKit generated {action_count} "
