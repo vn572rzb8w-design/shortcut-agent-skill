@@ -41,6 +41,9 @@ class BuilderTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.check([{'action': 'invented.action'}])
         with self.assertRaises(ValueError): self.check([{'action': 'Show Notification', 'parameters': {'Imaginary': 1}}])
         with self.assertRaises(ValueError): self.check([{'action': 'Show Notification', 'parameters': {'Body': {'$ref': 'future'}}}])
+        with self.assertRaisesRegex(ValueError, 'null is not a valid XML plist'):
+            validate_document({'WFWorkflowActions':[{'WFWorkflowActionIdentifier':'is.workflow.actions.notification',
+                             'WFWorkflowActionParameters':{'UUID':'one','WFNotificationActionBody':None}}]}, 1)
 
     def test_planner_search_and_blueprint(self):
         from scripts.plan_with_ai import plan, search_actions
