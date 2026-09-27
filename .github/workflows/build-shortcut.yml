@@ -8,9 +8,9 @@ on:
         required: true
         default: "ChatGPT Shortcut"
       shortcut_description:
-        description: "Describe the shortcut you want"
+        description: "Describe the shortcut you want or paste an AI JSON blueprint"
         required: true
-        default: "Show a notification saying Hello from ChatGPT"
+        default: '{"actions":[{"identifier":"is.workflow.actions.setbrightness","parameters":{"WFBrightness":0.5,"ShowWhenRun":false}}]}'
 
 permissions:
   contents: read
@@ -38,141 +38,14 @@ jobs:
           python - <<'PY'
           import shortcutkit
           from shortcutkit import actions
-
           print("ShortcutKit imported successfully")
           print("ShortcutKit actions catalogue loaded")
-          PY
-
-      - name: Inspect ShortcutKit internals
-        run: |
-          python3 - <<'PY'
-          import shortcutkit
-          import os
-          import pkgutil
-
-          root = os.path.dirname(shortcutkit.__file__)
-
-          print("SHORTCUTKIT ROOT:")
-          print(root)
-
-          print("\n=== MODULES ===")
-          for module in pkgutil.walk_packages(
-              shortcutkit.__path__,
-              shortcutkit.__name__ + "."
-          ):
-              print(module.name)
-
-          print("\n=== PACKAGE FILES ===")
-          for dirpath, dirnames, filenames in os.walk(root):
-              for filename in filenames:
-                  path = os.path.join(dirpath, filename)
-
-                  if filename.endswith(
-                      (".py", ".json", ".yaml", ".yml", ".plist")
-                  ):
-                      print(path)
-
-          print("\n=== SEARCH FOR WFBrightness ===")
-
-          found = False
-
-          for dirpath, dirnames, filenames in os.walk(root):
-              for filename in filenames:
-                  path = os.path.join(dirpath, filename)
-
-                  try:
-                      with open(
-                          path,
-                          "r",
-                          encoding="utf-8",
-                          errors="ignore"
-                      ) as f:
-                          text = f.read()
-
-                      if "WFBrightness" in text:
-                          found = True
-
-                          print("\nFOUND:")
-                          print(path)
-
-                          positions = []
-                          start = 0
-
-                          while True:
-                              pos = text.find("WFBrightness", start)
-
-                              if pos == -1:
-                                  break
-
-                              positions.append(pos)
-                              start = pos + 1
-
-                          for pos in positions[:10]:
-                              print("\n--- MATCH ---")
-                              print(
-                                  text[
-                                      max(0, pos - 1500):
-                                      pos + 3000
-                                  ]
-                              )
-
-                  except Exception:
-                      pass
-
-          if not found:
-              print("WFBrightness was not found in readable package files.")
-
-          print("\n=== SEARCH FOR VALIDATOR TEXT ===")
-
-          needles = [
-              "unknown parameter",
-              "known:",
-              "CustomOutputName",
-              "WFControlFlowMode"
-          ]
-
-          for needle in needles:
-              print(f"\nSEARCHING: {needle}")
-
-              for dirpath, dirnames, filenames in os.walk(root):
-                  for filename in filenames:
-                      path = os.path.join(dirpath, filename)
-
-                      try:
-                          with open(
-                              path,
-                              "r",
-                              encoding="utf-8",
-                              errors="ignore"
-                          ) as f:
-                              text = f.read()
-
-                          if needle in text:
-                              print("FOUND:", path)
-
-                              pos = text.find(needle)
-
-                              print(
-                                  text[
-                                      max(0, pos - 1000):
-                                      pos + 2500
-                                  ]
-                              )
-
-                      except Exception:
-                          pass
           PY
 
       - name: Generate ShortcutKit action database
         run: |
           python3 scripts/generate_action_database.py
 
-          echo ""
-          echo "=== DATABASE SIZE ==="
-          wc -c data/actions.json
-
-          echo ""
-          echo "=== ACTION COUNT ==="
           python3 - <<'PY'
           import json
 
@@ -182,42 +55,6 @@ jobs:
           print("Generated from:", database.get("generated_from"))
           print("Action count:", database.get("action_count"))
           PY
-
-          echo ""
-          echo "=== IMPORTANT ACTION SCHEMAS ==="
-          python3 - <<'PY'
-          import json
-
-          with open("data/actions.json", encoding="utf-8") as f:
-              database = json.load(f)
-
-          wanted = [
-              "orientationlock",
-              "setbrightness",
-              "setvolume",
-              "wifi",
-              "bluetooth",
-              "wait",
-              "lowpower"
-          ]
-
-          for action in database.get("actions", []):
-              identifier = action.get("identifier", "")
-              identifier_lower = identifier.lower()
-
-              if any(word in identifier_lower for word in wanted):
-                  print()
-                  print(json.dumps(
-                      action,
-                      indent=2,
-                      ensure_ascii=False
-                  ))
-          PY
-
-      - name: Show repository
-        run: |
-          echo "Repository loaded successfully"
-          find . -maxdepth 3 -type f | sort
 
       - name: Build shortcut
         env:
