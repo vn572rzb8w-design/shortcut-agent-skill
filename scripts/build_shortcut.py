@@ -484,7 +484,7 @@ def main():
 
         unsigned_path = os.path.join(
             "output",
-            filename + "-unsigned.shortcut"
+            filename + "-unsigned.plist"
         )
 
         signed_path = os.path.join(
