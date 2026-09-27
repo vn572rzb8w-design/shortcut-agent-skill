@@ -38,8 +38,60 @@ jobs:
           python - <<'PY'
           import shortcutkit
           from shortcutkit import actions
+
           print("ShortcutKit imported successfully")
           print("ShortcutKit actions catalogue loaded")
+          PY
+
+      - name: Generate ShortcutKit action database
+        run: |
+          python3 scripts/generate_action_database.py
+
+          echo ""
+          echo "=== DATABASE SIZE ==="
+          wc -c data/actions.json
+
+          echo ""
+          echo "=== ACTION COUNT ==="
+          python3 - <<'PY'
+          import json
+
+          with open("data/actions.json", encoding="utf-8") as f:
+              database = json.load(f)
+
+          print("Generated from:", database.get("generated_from"))
+          print("Action count:", database.get("action_count"))
+          PY
+
+          echo ""
+          echo "=== IMPORTANT ACTION SCHEMAS ==="
+          python3 - <<'PY'
+          import json
+
+          with open("data/actions.json", encoding="utf-8") as f:
+              database = json.load(f)
+
+          wanted = [
+              "orientationlock",
+              "setbrightness",
+              "setvolume",
+              "wifi",
+              "bluetooth",
+              "wait",
+              "lowpower"
+          ]
+
+          for action in database.get("actions", []):
+              identifier = action.get("identifier", "")
+              identifier_lower = identifier.lower()
+
+              if any(word in identifier_lower for word in wanted):
+                  print()
+                  print(json.dumps(
+                      action,
+                      indent=2,
+                      ensure_ascii=False
+                  ))
           PY
 
       - name: Show repository
