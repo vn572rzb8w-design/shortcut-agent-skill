@@ -11,7 +11,7 @@ HUBSIGN_URL = "https://hubsign.routinehub.services/sign"
 
 HEADERS = {
     "Content-Type": "application/json",
-    "User-Agent": "shortcut-agent-skill/1.0",
+    "User-Agent": "cherri/1.0",
     "Origin": "https://routinehub.co",
     "Referer": "https://routinehub.co/",
 }
