@@ -80,6 +80,95 @@ jobs:
           if-no-files-found: error
 
       - name: Upload validated plist for inspection
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: validated-plist
+          path: output/*-unsigned.plist
+          if-no-files-found: warn
+          retention-days: 1
+name: Build & Sign Apple Shortcut
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      shortcut_name:
+        description: "Shortcut name"
+        required: true
+        default: "ChatGPT Shortcut"
+      shortcut_description:
+        description: "Describe the shortcut you want or paste an AI JSON blueprint"
+        required: true
+        default: '{"actions":[{"identifier":"is.workflow.actions.setbrightness","parameters":{"WFBrightness":0.5,"ShowWhenRun":false}}]}'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ShortcutKit
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install shortcutkit openai
+
+      - name: Verify ShortcutKit
+        run: |
+          python - <<'PY'
+          import shortcutkit
+          from shortcutkit import actions
+          print("ShortcutKit imported successfully")
+          print("ShortcutKit actions catalogue loaded")
+          PY
+
+      - name: Generate ShortcutKit action database
+        run: |
+          python3 scripts/generate_action_database.py
+
+          python3 - <<'PY'
+          import json
+
+          with open("data/actions.json", encoding="utf-8") as f:
+              database = json.load(f)
+
+          print("Generated from:", database.get("generated_from"))
+          print("Action count:", database.get("action_count"))
+          PY
+
+      - name: Run regression tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Build shortcut
+        env:
+          SHORTCUT_NAME: ${{ inputs.shortcut_name || 'Work Text Check' }}
+          SHORTCUT_DESCRIPTION: ${{ inputs.shortcut_description || 'Ask for text, store it, if it contains work show a notification with entered text otherwise copy it to clipboard' }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          INTEGRATION_FIXTURE: ${{ github.event_name == 'push' }}
+        run: |
+          python3 scripts/build_shortcut.py \
+            "$SHORTCUT_NAME" \
+            "$SHORTCUT_DESCRIPTION"
+
+      - name: Upload signed shortcut
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-shortcut
+          path: output/*.shortcut
+          if-no-files-found: error
+
+      - name: Upload validated plist for inspection
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
