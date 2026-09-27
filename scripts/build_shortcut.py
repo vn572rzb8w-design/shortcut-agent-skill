@@ -198,6 +198,16 @@ def dictionary_items(mapping, produced, names):
 
 
 def validate_document(document, expected):
+    def reject_null(value, path):
+        if value is None:
+            raise ValueError(f'{path}: null is not a valid XML plist parameter')
+        if isinstance(value, dict):
+            for key, child in value.items():
+                reject_null(child, f'{path}.{key}')
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                reject_null(child, f'{path}[{index}]')
+    reject_null(document, 'workflow')
     entries = document.get('WFWorkflowActions')
     if not isinstance(entries, list) or len(entries) != expected or not entries:
         raise ValueError(f"Serialized action count mismatch: expected {expected}, got {len(entries) if isinstance(entries, list) else 'invalid'}")
@@ -328,8 +338,13 @@ def integration_blueprint():
 
 def build_plain_text_shortcut(name, description):
     from scripts.plan_with_ai import plan
+    def preflight(blueprint):
+        trial = build_with_shortcutkit(name, blueprint)
+        document = trial.to_plist()
+        validate_document(document, len(trial.actions))
+        plistlib.dumps(document, fmt=plistlib.FMT_XML)
     return build_with_shortcutkit(
-        name, plan(description, validate=lambda blueprint: build_with_shortcutkit(name, blueprint))
+        name, plan(description, validate=preflight)
     )
 
 
