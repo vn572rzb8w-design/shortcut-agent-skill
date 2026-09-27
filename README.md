@@ -22,6 +22,14 @@ Get a signed `.shortcut` file ready to install on your iPhone, iPad, or Mac.
 
 </div>
 
+## Current generator
+
+`python scripts/build_shortcut.py "Name" "Describe the shortcut"` uses an OpenAI API planner when `OPENAI_API_KEY` is set. The planner searches ShortcutKit's generated action metadata; the builder validates exact identifiers, parameter keys and types, references and control-flow groups before signing via HubSign. In GitHub Actions, add `OPENAI_API_KEY` as a repository secret for natural-language workflow dispatches. A JSON semantic blueprint needs no key. The push workflow runs unit tests and a deterministic seven-action signed integration build.
+
+Run `python scripts/generate_action_database.py --search "notification"` to inspect metadata-derived actions and parameters. The catalogue is generated rather than maintained by hand. Third-party App Intents without vetted metadata, specialized parameter encodings, and iPhone runtime behavior remain limited. The importable AEA1 envelope confirms signing, not execution.
+
+**Actual runtime requirements:** Python 3, `shortcutkit`, `openai` for plain-language planning, and network access to HubSign. macOS is only needed for Apple's own `shortcuts sign` alternative. The API key is separate from a ChatGPT subscription.
+
 ## Requirements
 
 - **macOS** (required for the `shortcuts sign` CLI tool)
