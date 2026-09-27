@@ -59,5 +59,21 @@ class BuilderTests(unittest.TestCase):
                     return cls.queue.pop(0)
         self.check(plan('Ask for text and check work', client=Client())['actions'])
 
+    def test_planner_repairs_missing_named_variable(self):
+        from scripts.plan_with_ai import plan
+        missing = {'actions':[{'action':'Ask for Input', 'id':'answer'}]}
+        fixed = {'actions':[{'action':'Ask for Input', 'id':'answer'},
+                            {'action':'Set Variable', 'parameters':{'Variable':'Entered Text', 'Input':{'$ref':'answer'}}}]}
+        class Client:
+            class responses:
+                queue = [SimpleNamespace(output=[], output_text=json.dumps(missing)),
+                         SimpleNamespace(output=[], output_text=json.dumps(fixed))]
+                @classmethod
+                def create(cls, **kwargs):
+                    return cls.queue.pop(0)
+        result = plan('Save it as a named variable called Entered Text.', client=Client(),
+                      validate=lambda blueprint: build_with_shortcutkit('repair', blueprint))
+        self.assertEqual(result, fixed)
+
 
 if __name__ == '__main__': unittest.main()
